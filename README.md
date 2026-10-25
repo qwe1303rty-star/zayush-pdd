@@ -136,6 +136,22 @@ docker compose exec app npm run db:seed   # однократно: билеты, 
 5. HTTPS, резервные копии БД, мониторинг, длинный случайный `ADMIN_API_TOKEN`.
 6. Сверить параметры экзамена с актуальной редакцией регламента (ПП РФ № 1097, приказ МВД № 80).
 
+## Деплой на GitHub Pages (фронтенд) + бесплатный backend
+
+Фронтенд можно разместить бесплатно на GitHub Pages (workflow `.github/workflows/pages.yml` уже добавлен). Backend (Node + PostgreSQL) на GitHub не работает — его нужно разместить отдельно (Render/Fly.io + Neon/Supabase). Шаги:
+
+1. В GitHub репозитории: **Settings → Pages → Source → GitHub Actions**.
+2. В **Settings → Secrets and variables → Actions → Variables** добавьте `MINI_APP_API_BASE=https://your-backend.example` (адрес backend без слэша в конце).
+3. Backend (например Render, free tier):
+   - Build: `npm ci && npx prisma generate && npm run build`
+   - Start: `npx prisma migrate deploy && node apps/api/dist/server.js`
+   - Env: `NODE_ENV=production`, `DATABASE_URL`, `BOT_TOKEN`, `WEBAPP_URL=https://<user>.github.io/zayush-pdd/`, `BOT_MODE=webhook`, `TELEGRAM_WEBHOOK_SECRET`, `CORS_ORIGINS=https://<user>.github.io`, `LEGAL_*`, `PD_HASH_SECRET` и т.д.
+   - Один раз выполните `npm run db:seed` (через shell Render) — билеты, знаки, разметка.
+4. В @BotFather укажите Mini App URL = `https://<user>.github.io/zayush-pdd/`.
+5. После push в `main` workflow соберёт и опубликует фронтенд. Если `MINI_APP_API_BASE` пуст — приложение будет искать API на том же домене и не заработает.
+
+Локальная разработка по-прежнему: `npm run dev` (API :8080 + Vite :5173).
+
 ## Тесты
 
 70 тестов (Vitest): движок экзамена по правилам ГИБДД, ранги и XP, конфиг подписки, бот, интеграционные тесты API на реальной PostgreSQL — проверка initData и подмены пользователя, серверная проверка ответа, однократность XP, идемпотентность повторной отправки, исправление ошибок, повышение ранга, восстановление прогресса, экзамен с доп. вопросами, подписка (выкл/вкл/не подписан/сбой Telegram/льгота), права админа, запрет загрузки SVG, согласие на обработку ПДн и удаление аккаунта, подтверждение российского номера, сроки хранения, проверки production-конфигурации.
