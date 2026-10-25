@@ -1,0 +1,507 @@
+// Заюш ПДД — схема базы данных (PostgreSQL, Prisma 7)
+// Строка подключения задаётся в prisma.config.ts через DATABASE_URL.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../apps/api/src/generated/prisma"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ───────────────────────── Пользователи ─────────────────────────
+
+model User {
+  id                   String   @id @default(cuid())
+  /// Telegram user id. Устанавливается ТОЛЬКО после серверной проверки initData и согласия на обработку ПДн.
+  telegramId           BigInt   @unique
+  /// Имя из Telegram — только для обращения в интерфейсе и напоминаниях (минимизация ПДн: username и язык не храним)
+  firstName            String
+  /// Бот может писать пользователю (write_access / /start в боте)
+  botCanWrite          Boolean  @default(false)
+  notificationsEnabled Boolean  @default(false)
+  /// Кэш суммы XpEvent.amount — пересчитывается в транзакции при каждом начислении
+  xp                   Int      @default(0)
+  streakDays           Int      @default(0)
+  bestStreak           Int      @default(0)
+  /// Дата последнего учебного действия в формате YYYY-MM-DD (Europe/Moscow)
+  lastActiveDay        String?
+  /// Последний открытый билет — для «Продолжить обучение»
+  lastTicketId         String?
+  equippedCar          String   @default("car-pink")
+  /// Согласие на обработку ПДн (152-ФЗ): без него пользователь не создаётся
+  consentAt            DateTime?
+  consentVersion       String?
+  /// Подтверждение российского номера телефона (149-ФЗ, п. 10 ст. 8), если включено AUTH_RU_PHONE_REQUIRED.
+  /// Хранится только HMAC-хэш номера, сам номер не сохраняется.
+  phoneHash            String?
+  phoneVerifiedAt      DateTime?
+  isBlocked            Boolean  @default(false)
+  /// Последний вход — для удаления неактивных аккаунтов по сроку хранения (RETENTION_INACTIVE_DAYS)
+  lastSeenAt           DateTime @default(now())
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  answers            UserAnswer[]
+  progress           UserProgress[]
+  favorites          FavoriteQuestion[]
+  favoriteSigns      FavoriteSign[]
+  mistakes           Mistake[]
+  examAttempts       ExamAttempt[]
+  achievements       UserAchievement[]
+  rewards            UserReward[]
+  xpEvents           XpEvent[]
+  dailyProgress      DailyProgress[]
+  subscriptionChecks SubscriptionCheck[]
+  feedbackReports    FeedbackReport[]
+  sessions           UserSession[]
+
+  @@index([lastSeenAt])
+}
+
+// ───────────────────────── Контент ─────────────────────────
+
+model UserSession {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  startedAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+
+  @@index([userId, startedAt])
+  @@index([startedAt])
+}
+
+model Topic {
+  id          String     @id @default(cuid())
+  slug        String     @unique
+  title       String
+  description String?
+  /// Тематический блок экзамена (1..4), к которому относится тема
+  examBlock   Int?
+  sortOrder   Int        @default(0)
+  questions   Question[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+}
+
+model Ticket {
+  id          String     @id @default(cuid())
+  /// Например: "demo" — демонстрационный набор, "abm-2026" — официальные билеты A/B/M
+  setCode     String
+  number      Int
+  title       String
+  isDemo      Boolean    @default(true)
+  isPublished Boolean    @default(true)
+  questions   Question[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@unique([setCode, number])
+}
+
+model Question {
+  id             String   @id @default(cuid())
+  /// Стабильный внешний ключ для импорта (например "demo-signs-01")
+  externalId     String   @unique
+  ticketId       String?
+  ticketPosition Int?
+  topicId        String
+  /// Смешная сценка-подводка (зайки/котики). Не влияет на смысл вопроса.
+  scene          String?
+  /// Текст в стиле «Заюш» (тренировка)
+  text           String
+  /// Официальная формулировка билета — показывается в режиме экзамена
+  officialText   String?
+  /// Тематический блок экзамена 1..4 (в официальных билетах — по позиции: 1–5, 6–10, 11–15, 16–20)
+  examBlock      Int?
+  imageUrl       String?
+  imageAlt       String?
+  /// Серьёзное объяснение правильного ответа
+  explanation    String
+  /// Подсказка до ответа: наводит на правило, но не называет ответ
+  hint           String?
+  /// Практический вывод «запомни»
+  takeaway       String?
+  /// Пункты ПДД, подтверждённые по официальному тексту (например ["10.2"])
+  clauseRefs     String[]
+  /// Номера знаков из Приложения 1 к ПДД (например ["5.16"])
+  signRefs       String[]
+  /// Ссылка на источник проверки
+  sourceUrl      String?
+  isDemo         Boolean  @default(true)
+  isPublished    Boolean  @default(true)
+  verifiedAt     DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  ticket    Ticket?            @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  topic     Topic              @relation(fields: [topicId], references: [id])
+  options   AnswerOption[]
+  answers   UserAnswer[]
+  progress  UserProgress[]
+  favorites FavoriteQuestion[]
+  mistakes  Mistake[]
+  reports   FeedbackReport[]
+
+  @@index([ticketId, ticketPosition])
+  @@index([topicId])
+}
+
+model AnswerOption {
+  id         String  @id @default(cuid())
+  questionId String
+  /// Буква варианта: А, Б, В, Г, Д
+  label      String
+  text       String
+  /// Никогда не отдаётся клиенту до проверки ответа
+  isCorrect  Boolean @default(false)
+  /// Почему этот вариант неверен (для разбора)
+  whyWrong   String?
+  sortOrder  Int     @default(0)
+
+  question Question     @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  answers  UserAnswer[]
+
+  @@index([questionId])
+}
+
+model RoadSign {
+  id          String   @id @default(cuid())
+  /// Номер по Приложению 1 к ПДД, например "5.16"
+  code        String   @unique
+  title       String
+  /// warning | priority | prohibitory | mandatory | special | info | service | plates | markup
+  category    String
+  description String
+  /// Ответственность по КоАП из исходного набора (суммы — на дату обновления набора)
+  penalty     String?
+  example     String?
+  imageUrl    String
+  /// true — изображение сверено с ГОСТ Р 52290; false — векторная перерисовка, требует сверки
+  imageVerified Boolean @default(false)
+  sortOrder   Int      @default(0)
+  isPublished Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  favorites FavoriteSign[]
+}
+
+/// Проверенные готовые объяснения для помощника «Спроси Заюша» (без AI)
+model KnowledgeEntry {
+  id         String   @id @default(cuid())
+  externalId String   @unique
+  title      String
+  /// Ключевые слова/фразы для поиска (нижний регистр)
+  keywords   String[]
+  answer     String
+  clauseRefs String[]
+  signRefs   String[]
+  isPublished Boolean @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+// ───────────────────────── Учёба и прогресс ─────────────────────────
+
+enum AnswerMode {
+  TRAINING
+  MISTAKES
+  EXAM
+  DAILY
+}
+
+model UserAnswer {
+  id              String     @id @default(cuid())
+  userId          String
+  questionId      String
+  optionId        String
+  isCorrect       Boolean
+  mode            AnswerMode
+  examAttemptId   String?
+  /// Идемпотентность: повторная отправка с тем же ключом вернёт сохранённый результат
+  clientAttemptId String
+  xpAwarded       Int        @default(0)
+  createdAt       DateTime   @default(now())
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  question    Question     @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  option      AnswerOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  examAttempt ExamAttempt? @relation(fields: [examAttemptId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, clientAttemptId])
+  @@unique([examAttemptId, questionId])
+  @@index([userId, createdAt])
+}
+
+model UserProgress {
+  id           String   @id @default(cuid())
+  userId       String
+  questionId   String
+  attempts     Int      @default(0)
+  correctCount Int      @default(0)
+  lastCorrect  Boolean  @default(false)
+  firstAnsweredAt DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, questionId])
+}
+
+model FavoriteQuestion {
+  id         String   @id @default(cuid())
+  userId     String
+  questionId String
+  createdAt  DateTime @default(now())
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, questionId])
+}
+
+model FavoriteSign {
+  id        String   @id @default(cuid())
+  userId    String
+  signId    String
+  createdAt DateTime @default(now())
+
+  user User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sign RoadSign @relation(fields: [signId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, signId])
+}
+
+model Mistake {
+  id         String    @id @default(cuid())
+  userId     String
+  questionId String
+  count      Int       @default(1)
+  lastWrongAt DateTime @default(now())
+  /// Ошибка исправлена (правильный ответ в режиме «Мои ошибки»)
+  resolvedAt DateTime?
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, questionId])
+  @@index([userId, resolvedAt])
+}
+
+enum ExamStatus {
+  IN_PROGRESS
+  PASSED
+  FAILED
+  EXPIRED
+}
+
+model ExamAttempt {
+  id           String     @id @default(cuid())
+  userId       String
+  /// Код конфигурации экзамена (см. packages/shared/src/exam.ts)
+  examCode     String
+  status       ExamStatus @default(IN_PROGRESS)
+  /// Список вопросов попытки: [{questionId, block, extra}] — порядок фиксирован сервером
+  items        Json
+  startedAt    DateTime   @default(now())
+  deadlineAt   DateTime
+  finishedAt   DateTime?
+  correctCount Int        @default(0)
+  wrongCount   Int        @default(0)
+  /// Причина провала / итог
+  resultReason String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  user    User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  answers UserAnswer[]
+
+  @@index([userId, status])
+}
+
+model DailyProgress {
+  id        String  @id @default(cuid())
+  userId    String
+  /// YYYY-MM-DD (Europe/Moscow)
+  day       String
+  answered  Int     @default(0)
+  correct   Int     @default(0)
+  challengeDone Boolean @default(false)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, day])
+}
+
+// ───────────────────────── Геймификация ─────────────────────────
+
+/// Журнал начислений XP. Уникальный ключ защищает от повторного начисления.
+model XpEvent {
+  id        String   @id @default(cuid())
+  userId    String
+  amount    Int
+  reason    String
+  /// Ключ идемпотентности, например "first-correct:<questionId>" или "daily:2026-10-21"
+  dedupeKey String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, dedupeKey])
+  @@index([userId, createdAt])
+}
+
+model Rank {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  title     String
+  minXp     Int
+  tagline   String?
+  image     String?
+  /// Коды наград, которые открывает ранг
+  rewards   String[]
+  sortOrder Int      @default(0)
+  updatedAt DateTime @updatedAt
+}
+
+model Achievement {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  title       String
+  description String
+  icon        String
+  xpReward    Int      @default(0)
+  sortOrder   Int      @default(0)
+
+  users UserAchievement[]
+}
+
+model UserAchievement {
+  id            String   @id @default(cuid())
+  userId        String
+  achievementId String
+  unlockedAt    DateTime @default(now())
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievement Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, achievementId])
+}
+
+model UserReward {
+  id         String   @id @default(cuid())
+  userId     String
+  /// Код награды из packages/shared/src/rewards.ts
+  rewardCode String
+  source     String
+  unlockedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, rewardCode])
+}
+
+// ───────────────────────── Настройки и подписки ─────────────────────────
+
+/// Ключ-значение. Например: "subscription" → {"enabled": true}, "xp" → баланс, "texts" → переопределения фраз
+model AppSettings {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+enum SubscriptionKind {
+  CHANNEL
+  GROUP
+}
+
+model RequiredSubscription {
+  id         String           @id @default(cuid())
+  kind       SubscriptionKind
+  /// @username или числовой id (-100…). Никогда не отдаётся клиенту.
+  chatId     String
+  title      String
+  /// Публичная ссылка или ссылка-приглашение, заданная владельцем
+  inviteUrl  String
+  isActive   Boolean          @default(true)
+  sortOrder  Int              @default(0)
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  @@unique([kind, chatId])
+}
+
+model SubscriptionCheck {
+  id        String   @id @default(cuid())
+  userId    String
+  passed    Boolean
+  /// Результаты по каждому источнику: [{sourceId, ok, status}] — без chatId
+  details   Json
+  checkedAt DateTime @default(now())
+  /// До какого момента успешная проверка считается действительной
+  validUntil DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, checkedAt])
+}
+
+enum ReportStatus {
+  OPEN
+  RESOLVED
+  REJECTED
+}
+
+model FeedbackReport {
+  id         String       @id @default(cuid())
+  userId     String
+  questionId String?
+  message    String
+  status     ReportStatus @default(OPEN)
+  adminNote  String?
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  question Question? @relation(fields: [questionId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+}
+
+// ───────────────────────── 152-ФЗ ─────────────────────────
+
+enum ConsentAction {
+  GRANTED
+  WITHDRAWN
+}
+
+/// Журнал согласий: подтверждает законность обработки. Хранит только псевдоним (HMAC Telegram ID),
+/// поэтому после удаления аккаунта не позволяет восстановить личность без ключа оператора.
+model ConsentLog {
+  id          String        @id @default(cuid())
+  subjectHash String
+  action      ConsentAction
+  version     String
+  createdAt   DateTime      @default(now())
+
+  @@index([subjectHash, createdAt])
+}
+
+/// Одноразовые коды подтверждения телефона (хэш номера и кода, без открытых значений)
+model PhoneCode {
+  id          String   @id @default(cuid())
+  subjectHash String
+  phoneHash   String
+  codeHash    String
+  attempts    Int      @default(0)
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+
+  @@index([subjectHash, createdAt])
+}

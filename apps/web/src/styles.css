@@ -1,0 +1,153 @@
+@import 'tailwindcss';
+
+/* ───────────── Design tokens «Заюш ПДД» ─────────────
+   Палитра, радиусы, тени и шрифты — единый источник для всего интерфейса. */
+@theme {
+  --font-sans: 'Nunito Variable', 'Nunito', ui-rounded, system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  --color-pink: #ff2f91;
+  --color-pink-strong: #e91e7e;
+  --color-pink-soft: #ffe0ef;
+  --color-pink-50: #fff0f7;
+  --color-pink-100: #ffe4f1;
+  --color-pink-200: #ffd0e6;
+  --color-pink-300: #ffb3d6;
+  --color-ink: #24232b;
+  --color-ink-soft: #5d5866;
+  --color-muted: #9a8f9e;
+  --color-gold: #ffd34e;
+  --color-gold-deep: #f4b400;
+  --color-ok: #2fbf71;
+  --color-ok-soft: #e3f8ec;
+  --color-bad: #ff4d6a;
+  --color-bad-soft: #ffe6eb;
+  --color-sky: #2563eb;
+  --color-sky-soft: #e8f0ff;
+  --color-lilac: #8b5cf6;
+
+  --radius-card: 22px;
+  --radius-tile: 18px;
+  --radius-pill: 999px;
+
+  --shadow-card: 0 6px 20px -8px rgb(255 47 145 / 0.22), 0 2px 6px -2px rgb(36 35 43 / 0.06);
+  --shadow-lift: 0 14px 30px -12px rgb(255 47 145 / 0.35);
+  --shadow-button: 0 8px 18px -6px rgb(255 47 145 / 0.55);
+
+  --animate-pop: pop 0.35s cubic-bezier(0.2, 1.4, 0.4, 1);
+  --animate-shake: shake 0.4s ease-in-out;
+  --animate-float: float 3.2s ease-in-out infinite;
+  --animate-fade-up: fade-up 0.35s ease-out both;
+}
+
+@keyframes pop {
+  0% { transform: scale(0.85); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-6px); }
+  40% { transform: translateX(6px); }
+  60% { transform: translateX(-4px); }
+  80% { transform: translateX(4px); }
+}
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+@keyframes fade-up {
+  0% { transform: translateY(8px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+@keyframes shimmer {
+  0% { background-position: -200px 0; }
+  100% { background-position: 200px 0; }
+}
+
+:root {
+  --safe-top: max(env(safe-area-inset-top), var(--tg-safe-area-inset-top, 0px));
+  --safe-bottom: max(env(safe-area-inset-bottom), var(--tg-safe-area-inset-bottom, 0px));
+  --content-top: var(--tg-content-safe-area-inset-top, 0px);
+  --nav-h: 64px;
+  color-scheme: light;
+}
+
+html,
+body {
+  background: var(--color-pink-50);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+
+body {
+  min-height: 100dvh;
+  background:
+    radial-gradient(1200px 500px at 50% -200px, #ffd9ec 0%, transparent 60%),
+    radial-gradient(500px 300px at 110% 30%, #ffe8f4 0%, transparent 70%),
+    var(--color-pink-50);
+  background-attachment: fixed;
+}
+
+button {
+  cursor: pointer;
+  touch-action: manipulation;
+}
+button:disabled {
+  cursor: default;
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #ffe6f2 0px, #fff4fa 80px, #ffe6f2 160px);
+  background-size: 400px 100%;
+  animation: shimmer 1.2s linear infinite;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+/* Логотип-надпись: розовый с белой и тёмной обводкой + чёрная вторая строка, как в бренд-паке */
+.wordmark {
+  font-weight: 900;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+.wordmark-pink,
+.wordmark-ink {
+  paint-order: stroke fill;
+  -webkit-text-stroke: 0.16em #fff;
+  filter: drop-shadow(0 0 0.5px #24232b) drop-shadow(0 0 0.5px #24232b) drop-shadow(0 3px 4px rgb(255 47 145 / 0.25));
+}
+.wordmark-pink {
+  color: var(--color-pink);
+}
+.wordmark-ink {
+  color: var(--color-ink);
+  margin-left: 0.6em;
+}
+
+.sparkle-bg {
+  background-image:
+    radial-gradient(circle at 12% 20%, rgb(255 255 255 / 0.9) 0 2px, transparent 3px),
+    radial-gradient(circle at 80% 15%, rgb(255 255 255 / 0.9) 0 1.5px, transparent 2.5px),
+    radial-gradient(circle at 70% 80%, rgb(255 255 255 / 0.8) 0 2px, transparent 3px),
+    radial-gradient(circle at 25% 75%, rgb(255 255 255 / 0.7) 0 1.5px, transparent 2.5px);
+}
+
+/* Юридические документы (HTML с сервера) */
+.legal-doc { font-size: 13.5px; line-height: 1.6; color: var(--color-ink); font-weight: 500; }
+.legal-doc h2 { font-size: 15px; font-weight: 900; margin: 18px 0 6px; }
+.legal-doc p { margin: 6px 0; }
+.legal-doc ul { margin: 6px 0; padding-left: 18px; list-style: disc; }
+.legal-doc li { margin: 3px 0; }
+.legal-doc a { color: var(--color-pink); text-decoration: underline; text-underline-offset: 2px; word-break: break-word; }
+.legal-doc table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 8px 0; display: block; overflow-x: auto; }
+.legal-doc td, .legal-doc th { border: 1px solid var(--color-pink-100); padding: 5px 6px; vertical-align: top; text-align: left; }
+.legal-doc th { background: var(--color-pink-50); font-weight: 800; }
+.legal-doc .muted { color: var(--color-muted); font-size: 11.5px; }
+.legal-doc code { font-size: 12px; }

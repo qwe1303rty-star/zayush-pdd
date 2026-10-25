@@ -1,0 +1,35 @@
+# Локальный/серверный запуск: docker compose up -d --build
+# Перед запуском создайте .env (см. .env.example). DATABASE_URL переопределяется ниже.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: zayush
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_strong_password}
+      POSTGRES_DB: zayush
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U zayush']
+      interval: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://zayush:${POSTGRES_PASSWORD:-change_me_strong_password}@db:5432/zayush
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - '8080:8080'
+    volumes:
+      - uploads:/data/uploads
+
+volumes:
+  pgdata:
+  uploads:
