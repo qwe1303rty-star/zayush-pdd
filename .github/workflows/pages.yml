@@ -31,6 +31,9 @@ jobs:
       - name: Generate Prisma client
         run: npx prisma generate
 
+      - name: Build shared package
+        run: npm run build -w @zayush/shared
+
       - name: Build web
         env:
           # GitHub Pages отдаёт сайт из подпапки репозитория.
