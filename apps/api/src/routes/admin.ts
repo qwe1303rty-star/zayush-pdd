@@ -13,6 +13,51 @@ import { parse } from './user.js';
 const id = z.string().min(1).max(64);
 const LABELS = ['А', 'Б', 'В', 'Г', 'Д'];
 
+/** Начало текущих суток по московскому времени, в UTC */
+function startOfMoscowDay(): Date {
+  const now = new Date();
+  const msk = new Date(now.getTime() + 3 * 3_600_000);
+  return new Date(Date.UTC(msk.getUTCFullYear(), msk.getUTCMonth(), msk.getUTCDate()) - 3 * 3_600_000);
+}
+
+/** Поиск по Telegram ID, если строка — число */
+function toTgId(s?: string): { telegramId: bigint } | undefined {
+  if (s && /^\d{3,15}$/.test(s.trim())) return { telegramId: BigInt(s.trim()) };
+  return undefined;
+}
+
+/** Сколько пользователей онлайн: уникальные отметки за окно ACTIVITY_ONLINE_MIN */
+async function onlineCount(ctx: AppContext): Promise<number> {
+  const from = new Date(Date.now() - ctx.env.ACTIVITY_ONLINE_MIN * 60_000);
+  const r = await ctx.db.activityPing.findMany({ where: { at: { gte: from } }, distinct: ['userId'], select: { userId: true } });
+  return r.length;
+}
+
+/** Пиковый онлайн: максимум уникальных пользователей в бакете (минуты/часы) за период */
+async function peakBucketed(ctx: AppContext, from: Date, unit: 'minute' | 'hour', _sizeMin: number): Promise<{ users: number; at: Date } | null> {
+  const rows = await ctx.db.$queryRaw<{ bucket: Date; users: bigint }[]>`
+    SELECT date_trunc(${unit}, "at") AS bucket, count(DISTINCT "userId")::bigint AS users
+    FROM "ActivityPing" WHERE "at" >= ${from} GROUP BY 1 ORDER BY users DESC LIMIT 1`;
+  const r = rows[0];
+  return r ? { users: Number(r.users), at: r.bucket } : { users: 0, at: new Date() };
+}
+
+/** Сессии из отметок присутствия: разрыв больше (ping+5) минут начинает новую сессию */
+function buildSessions(dates: Date[], pingMin: number): { start: Date; end: Date; minutes: number; pings: number }[] {
+  const asc = [...dates].sort((a, b) => a.getTime() - b.getTime());
+  const gap = (pingMin + 5) * 60_000;
+  const out: { start: Date; end: Date; minutes: number; pings: number }[] = [];
+  for (const d of asc) {
+    const cur = out[out.length - 1];
+    if (cur && d.getTime() - cur.end.getTime() <= gap) {
+      cur.end = d;
+      cur.pings++;
+    } else out.push({ start: d, end: d, minutes: 0, pings: 1 });
+  }
+  for (const s of out) s.minutes = Math.max(1, Math.round((s.end.getTime() - s.start.getTime()) / 60_000) + pingMin);
+  return out.reverse();
+}
+
 const questionBody = z.object({
   externalId: z.string().min(2).max(64).regex(/^[a-z0-9-]+$/, 'externalId: только латиница, цифры и дефис'),
   topicSlug: z.string().min(1),
@@ -46,99 +91,35 @@ export async function adminRoutes(app: FastifyInstance, ctx: AppContext) {
 
   // ── Статистика ──
   app.get('/stats', async () => {
-    const now = new Date();
-    const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const since7 = new Date(now.getTime() - 7 * 86_400_000);
-    const since30 = new Date(now.getTime() - 30 * 86_400_000);
-    const since14 = new Date(now.getTime() - 14 * 86_400_000);
-
-    const [
-      users,
-      newUsers7,
-      newToday,
-      activeNow,
-      activeToday,
-      active7,
-      active30,
-      answers,
-      answers7,
-      questions,
-      demo,
-      openReports,
-      exams,
-      examsPassed,
-      mistakesTotal,
-      mistakesOpen,
-      favorites,
-    ] = await Promise.all([
+    const since = new Date(Date.now() - 7 * 86_400_000);
+    const [users, active7, answers, answers7, questions, demo, openReports, exams, examsPassed] = await Promise.all([
       ctx.db.user.count(),
-      ctx.db.user.count({ where: { createdAt: { gte: since7 } } }),
-      ctx.db.user.count({ where: { createdAt: { gte: dayStart } } }),
-      ctx.db.user.count({ where: { lastSeenAt: { gte: new Date(Date.now() - 5 * 60_000) } } }),
-      ctx.db.user.count({ where: { lastSeenAt: { gte: dayStart } } }),
-      ctx.db.user.count({ where: { lastSeenAt: { gte: since7 } } }),
-      ctx.db.user.count({ where: { lastSeenAt: { gte: since30 } } }),
+      ctx.db.user.count({ where: { updatedAt: { gte: since } } }),
       ctx.db.userAnswer.count(),
-      ctx.db.userAnswer.count({ where: { createdAt: { gte: since7 } } }),
+      ctx.db.userAnswer.count({ where: { createdAt: { gte: since } } }),
       ctx.db.question.count({ where: { isPublished: true } }),
       ctx.db.question.count({ where: { isPublished: true, isDemo: true } }),
       ctx.db.feedbackReport.count({ where: { status: 'OPEN' } }),
       ctx.db.examAttempt.count({ where: { status: { not: 'IN_PROGRESS' } } }),
       ctx.db.examAttempt.count({ where: { status: 'PASSED' } }),
-      ctx.db.mistake.count(),
-      ctx.db.mistake.count({ where: { resolvedAt: null } }),
-      ctx.db.favoriteQuestion.count(),
     ]);
-
-    const sessions7Rows = await ctx.db.userSession.findMany({ where: { startedAt: { gte: since7 } }, select: { startedAt: true, lastSeenAt: true } });
-    const sessions7 = sessions7Rows.length;
-    const avgSessionMinutes7 = sessions7
-      ? Math.round((sessions7Rows.reduce((acc, s) => {
-          const ms = Math.min(s.lastSeenAt.getTime() - s.startedAt.getTime(), 30 * 60 * 1000);
-          return acc + Math.max(0, ms);
-        }, 0) / sessions7 / 60000) * 10) / 10
-      : 0;
-
-    const answers14 = await ctx.db.userAnswer.findMany({ where: { createdAt: { gte: since14 } }, select: { createdAt: true, userId: true } });
-    const sessions14 = await ctx.db.userSession.findMany({ where: { startedAt: { gte: since14 } }, select: { startedAt: true, userId: true } });
-    const dailyMap = new Map<string, { day: string; users: Set<string>; answers: number }>();
-    for (let i = 13; i >= 0; i--) {
-      const d = new Date(now.getTime() - i * 86_400_000);
-      const key = d.toISOString().slice(0, 10);
-      dailyMap.set(key, { day: key, users: new Set(), answers: 0 });
-    }
-    for (const a of answers14) {
-      const key = a.createdAt.toISOString().slice(0, 10);
-      const row = dailyMap.get(key);
-      if (row) { row.answers++; row.users.add(a.userId); }
-    }
-    for (const s of sessions14) {
-      const key = s.startedAt.toISOString().slice(0, 10);
-      const row = dailyMap.get(key);
-      if (row) row.users.add(s.userId);
-    }
-    const dailyActivity = [...dailyMap.values()].map((r) => ({ day: r.day, users: r.users.size, answers: r.answers }));
-
-    const topics = await ctx.db.topic.findMany({ orderBy: { sortOrder: 'asc' }, select: { id: true, title: true, _count: { select: { questions: true } } } });
-    const topTopics = (await Promise.all(topics.map(async (t) => {
-      const [totalAnswers, correctAnswers] = await Promise.all([
-        ctx.db.userAnswer.count({ where: { question: { topicId: t.id } } }),
-        ctx.db.userAnswer.count({ where: { question: { topicId: t.id }, isCorrect: true } }),
-      ]);
-      return { title: t.title, questions: t._count.questions, answers: totalAnswers, correct: correctAnswers, accuracy: totalAnswers ? Math.round((correctAnswers / totalAnswers) * 100) : 0 };
-    }))).sort((a, b) => b.answers - a.answers).slice(0, 8);
-
     const hardest = await ctx.db.mistake.groupBy({ by: ['questionId'], _count: { _all: true }, orderBy: { _count: { questionId: 'desc' } }, take: 5 });
     const hq = await ctx.db.question.findMany({ where: { id: { in: hardest.map((h) => h.questionId) } }, select: { id: true, text: true, externalId: true } });
 
+    const day = new Date(Date.now() - 86_400_000);
+    const [newToday, new7, onlineNow, peakDay, peakWeek] = await Promise.all([
+      ctx.db.user.count({ where: { createdAt: { gte: startOfMoscowDay() } } }),
+      ctx.db.user.count({ where: { createdAt: { gte: since } } }),
+      ctx.activity.enabled ? onlineCount(ctx) : Promise.resolve(null),
+      ctx.activity.enabled ? peakBucketed(ctx, day, 'minute', ctx.env.ACTIVITY_ONLINE_MIN) : Promise.resolve(null),
+      ctx.activity.enabled ? peakBucketed(ctx, since, 'hour', 60) : Promise.resolve(null),
+    ]);
+
     return {
       users,
-      newUsers7,
-      newToday,
-      activeNow,
-      activeToday,
       active7,
-      active30,
+      newToday,
+      new7,
       answers,
       answers7,
       questions,
@@ -146,75 +127,150 @@ export async function adminRoutes(app: FastifyInstance, ctx: AppContext) {
       openReports,
       exams,
       examsPassed,
-      mistakesTotal,
-      mistakesOpen,
-      favorites,
-      sessions7,
-      avgSessionMinutes7,
-      dailyActivity,
-      topTopics,
+      activityTracking: ctx.activity.enabled,
+      onlineNow,
+      peakDay,
+      peakWeek,
+      onlineWindowMin: ctx.env.ACTIVITY_ONLINE_MIN,
       hardest: hardest.map((h) => ({ ...hq.find((q) => q.id === h.questionId), mistakes: h._count._all })),
     };
   });
 
-  // ── Активность по минутам ──
+  // ── Аналитика посещаемости (ПДн; доступна при ACTIVITY_TRACKING) ──
+  const requireActivity = () => {
+    if (!ctx.activity.enabled) throw errors.badRequest('Аналитика посещаемости выключена (ACTIVITY_TRACKING=false)');
+  };
+
+  /** Тайм-серия для диаграммы: range=day — 24 часа, range=week — 7 дней (время московское) */
   app.get('/activity', async (req) => {
-    const q = parse(z.object({
-      limit: z.coerce.number().int().min(1).max(500).optional(),
-      hours: z.coerce.number().int().min(1).max(720).optional(),
-      newOnly: z.coerce.boolean().optional(),
-      activeNow: z.coerce.boolean().optional(),
-      groupBy: z.enum(['day', 'hour', 'minute']).optional(),
-    }), req.query);
-    const limit = q.limit ?? 200;
-    const hours = q.hours ?? 24;
-    const since = new Date(Date.now() - hours * 3600_000);
-    const now = Date.now();
-    const activeThreshold = new Date(now - 5 * 60_000);
-    const sessions = await ctx.db.userSession.findMany({
-      where: {
-        startedAt: { gte: since },
-        ...(q.activeNow ? { lastSeenAt: { gte: activeThreshold } } : {}),
-        ...(q.newOnly ? { user: { createdAt: { gte: since } } } : {}),
-      },
-      orderBy: { startedAt: 'desc' },
-      take: limit,
-      include: { user: { select: { id: true, firstName: true, telegramId: true, createdAt: true, lastSeenAt: true } } },
-    });
-    const mapped = sessions.map((s) => ({
-      id: s.id,
-      userId: s.user.id,
-      firstName: s.user.firstName,
-      telegramId: String(s.user.telegramId),
-      isNew: s.user.createdAt >= since,
-      isActiveNow: s.user.lastSeenAt >= activeThreshold,
-      startedAt: s.startedAt.toISOString(),
-      lastSeenAt: s.lastSeenAt.toISOString(),
-      durationMin: Math.max(0, Math.round((Math.min(s.lastSeenAt.getTime(), now) - s.startedAt.getTime()) / 60000)),
-    }));
+    requireActivity();
+    const q = parse(z.object({ range: z.enum(['day', 'week']).default('day') }), req.query);
+    const unit = q.range === 'day' ? 'hour' : 'day';
+    const from = q.range === 'day' ? startOfMoscowDay() : new Date(Date.now() - 6 * 86_400_000);
+    const rows = await ctx.db.$queryRaw<{ bucket: Date; users: bigint; pings: bigint }[]>`
+      SELECT date_trunc(${unit}, "at" AT TIME ZONE 'Europe/Moscow') AS bucket,
+             count(DISTINCT "userId")::bigint AS users,
+             count(*)::bigint AS pings
+      FROM "ActivityPing"
+      WHERE "at" >= ${from}
+      GROUP BY 1 ORDER BY 1`;
+    return { range: q.range, unit, points: rows.map((r) => ({ t: r.bucket, users: Number(r.users), pings: Number(r.pings) })) };
+  });
 
-    if (!q.groupBy) return mapped;
-
-    // Агрегация по периодам
-    const fmt = (d: Date) => {
-      const pad = (n: number) => String(n).padStart(2, '0');
-      if (q.groupBy === 'day') return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-      if (q.groupBy === 'hour') return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:00`;
-      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  /** Список пользователей с посещаемостью */
+  app.get('/users', async (req) => {
+    const q = parse(
+      z.object({
+        search: z.string().max(64).optional(),
+        sort: z.enum(['recent', 'new', 'xp', 'answers']).default('recent'),
+        page: z.coerce.number().int().min(0).max(10_000).default(0),
+      }),
+      req.query,
+    );
+    const take = 50;
+    const where = q.search?.trim()
+      ? { OR: [{ firstName: { contains: q.search.trim(), mode: 'insensitive' as const } }, toTgId(q.search)].filter(Boolean) as object[] }
+      : {};
+    const orderBy =
+      q.sort === 'new' ? { createdAt: 'desc' as const } : q.sort === 'xp' ? { xp: 'desc' as const } : { lastSeenAt: 'desc' as const };
+    const [total, rows] = await Promise.all([
+      ctx.db.user.count({ where }),
+      ctx.db.user.findMany({
+        where,
+        orderBy,
+        skip: q.page * take,
+        take,
+        select: {
+          id: true,
+          firstName: true,
+          telegramId: true,
+          xp: true,
+          streakDays: true,
+          lastSeenAt: true,
+          createdAt: true,
+          botCanWrite: true,
+          _count: { select: { answers: true, examAttempts: true } },
+        },
+      }),
+    ]);
+    const online = ctx.env.ACTIVITY_ONLINE_MIN * 60_000;
+    return {
+      total,
+      page: q.page,
+      pageSize: take,
+      activityTracking: ctx.activity.enabled,
+      users: rows.map((u) => ({
+        id: u.id,
+        firstName: u.firstName,
+        telegramId: String(u.telegramId),
+        xp: u.xp,
+        streakDays: u.streakDays,
+        answers: u._count.answers,
+        exams: u._count.examAttempts,
+        createdAt: u.createdAt,
+        lastSeenAt: u.lastSeenAt,
+        online: Date.now() - u.lastSeenAt.getTime() < online,
+      })),
     };
-    const groups = new Map<string, { period: string; count: number; users: Set<string> }>();
-    for (const s of sessions) {
-      const key = fmt(s.startedAt);
-      if (!groups.has(key)) groups.set(key, { period: key, count: 0, users: new Set() });
-      const g = groups.get(key)!;
-      g.count++;
-      g.users.add(s.user.id);
-    }
-    const timeline = [...groups.values()]
-      .map((g) => ({ period: g.period, count: g.count, users: g.users.size }))
-      .sort((a, b) => a.period.localeCompare(b.period));
+  });
 
-    return { timeline, sessions: mapped };
+  /** Карточка пользователя: профиль, сессии и активность по минутам/часам/дням */
+  app.get('/users/:id', async (req) => {
+    const uid = parse(id, (req.params as { id: string }).id);
+    const q = parse(z.object({ bucket: z.enum(['minute', 'hour', 'day']).default('day'), day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }), req.query);
+    const u = await ctx.db.user.findUnique({
+      where: { id: uid },
+      select: { id: true, firstName: true, telegramId: true, xp: true, streakDays: true, bestStreak: true, lastSeenAt: true, createdAt: true, consentAt: true, botCanWrite: true, notificationsEnabled: true, _count: { select: { answers: true, examAttempts: true, mistakes: true } } },
+    });
+    if (!u) throw errors.notFound('Пользователь не найден');
+
+    let series: { t: Date; pings: number }[] = [];
+    let sessions: { start: Date; end: Date; minutes: number; pings: number }[] = [];
+    if (ctx.activity.enabled) {
+      const unit = q.bucket;
+      const from =
+        unit === 'minute'
+          ? new Date((q.day ? Date.parse(q.day + 'T00:00:00+03:00') : startOfMoscowDay().getTime()))
+          : unit === 'hour'
+            ? new Date(Date.now() - 2 * 86_400_000)
+            : new Date(Date.now() - 30 * 86_400_000);
+      const to = unit === 'minute' ? new Date(from.getTime() + 86_400_000) : new Date(Date.now() + 1000);
+      const rows = await ctx.db.$queryRaw<{ bucket: Date; pings: bigint }[]>`
+        SELECT date_trunc(${unit}, "at" AT TIME ZONE 'Europe/Moscow') AS bucket, count(*)::bigint AS pings
+        FROM "ActivityPing" WHERE "userId" = ${uid} AND "at" >= ${from} AND "at" < ${to}
+        GROUP BY 1 ORDER BY 1`;
+      series = rows.map((r) => ({ t: r.bucket, pings: Number(r.pings) }));
+
+      // Сессии: соседние отметки с разрывом менее 30 минут — одна сессия
+      const pings = await ctx.db.activityPing.findMany({ where: { userId: uid }, orderBy: { at: 'desc' }, take: 3000, select: { at: true } });
+      sessions = buildSessions(pings.map((p) => p.at), ctx.env.ACTIVITY_PING_MIN).slice(0, 100);
+    }
+
+    const totalMinutes = sessions.reduce((s, x) => s + x.minutes, 0);
+    return {
+      user: {
+        id: u.id,
+        firstName: u.firstName,
+        telegramId: String(u.telegramId),
+        xp: u.xp,
+        streakDays: u.streakDays,
+        bestStreak: u.bestStreak,
+        answers: u._count.answers,
+        exams: u._count.examAttempts,
+        mistakes: u._count.mistakes,
+        createdAt: u.createdAt,
+        lastSeenAt: u.lastSeenAt,
+        consentAt: u.consentAt,
+        botCanWrite: u.botCanWrite,
+        notificationsEnabled: u.notificationsEnabled,
+      },
+      activityTracking: ctx.activity.enabled,
+      bucket: q.bucket,
+      series,
+      sessions,
+      sessionsTotal: sessions.length,
+      totalMinutes,
+    };
   });
 
   // ── Темы и билеты ──

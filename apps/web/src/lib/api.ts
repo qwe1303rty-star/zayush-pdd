@@ -12,6 +12,10 @@ export class ApiError extends Error {
 
 const ADMIN_TOKEN_KEY = 'zayush:admin-token';
 
+// Базовый адрес API. Пусто — относительный путь (один домен, production/Docker).
+// Для GitHub Pages задайте VITE_API_BASE=https://your-backend.example в сборке.
+const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/$/, '');
+
 export function getAdminToken(): string | null {
   try {
     return sessionStorage.getItem(ADMIN_TOKEN_KEY);
@@ -39,7 +43,7 @@ export async function api<T>(path: string, init: { method?: string; body?: unkno
   }
   let res: Response;
   try {
-    res = await fetch(`/api${path}`, {
+    res = await fetch(`${API_BASE}/api${path}`, {
       method: init.method ?? (init.body !== undefined ? 'POST' : 'GET'),
       headers,
       body: init.body !== undefined ? JSON.stringify(init.body) : undefined,

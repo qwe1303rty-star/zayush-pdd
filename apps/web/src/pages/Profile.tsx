@@ -1,12 +1,11 @@
 import { formatPoints } from '@zayush/shared';
 import { useQuery } from '@tanstack/react-query';
 import { Award, Car, ChevronDown, ChevronRight, Crown, Flame, GraduationCap, Settings as SettingsIcon, ShieldCheck } from 'lucide-react';
-import type { ReactNode } from 'react';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 import type { TopicDTO } from '@zayush/shared';
 import { Page } from '../components/Layout';
-import { Card, Pill, ProgressBar, ScreenHeader } from '../components/ui';
+import { Card, cx, Pill, ProgressBar, ScreenHeader } from '../components/ui';
 import { api } from '../lib/api';
 import { useMe } from '../lib/hooks';
 
@@ -14,7 +13,7 @@ export function Profile() {
   const navigate = useNavigate();
   const { data: me } = useMe();
   const topics = useQuery({ queryKey: ['topics'], queryFn: () => api<TopicDTO[]>('/topics') });
-  const [readinessOpen, setReadinessOpen] = useState(false);
+  const [readyOpen, setReadyOpen] = useState(true);
   if (!me) return null;
   const { user, rank, stats } = me;
 
@@ -41,31 +40,39 @@ export function Profile() {
         </div>
       </Card>
 
-      <Card className="mt-3 p-4">
-        <div className="flex items-center justify-between cursor-pointer select-none" onClick={() => setReadinessOpen((v) => !v)}>
-          <div className="flex items-center gap-2 font-black">
-            Готовность к экзамену
-            <ChevronDown className={`size-4 text-muted transition-transform ${readinessOpen ? 'rotate-180' : ''}`} />
+      <Card className="mt-3 p-4 overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setReadyOpen((v) => !v)}
+          aria-expanded={readyOpen}
+          aria-controls="readiness-body"
+          className="flex w-full items-center justify-between gap-2 text-left"
+        >
+          <div className="font-black">Готовность к экзамену</div>
+          <div className="flex items-center gap-2 shrink-0">
+            <Pill tone={stats.readiness >= 85 ? 'ok' : 'pink'}>{stats.readiness}%</Pill>
+            <ChevronDown className={cx('size-5 text-muted transition-transform', readyOpen && 'rotate-180')} />
           </div>
-          <Pill tone={stats.readiness >= 85 ? 'ok' : 'pink'}>{stats.readiness}%</Pill>
-        </div>
-        <ProgressBar value={stats.readiness / 100} className="mt-2" color="ok" />
-        <div className="mt-1.5 text-[12px] font-bold text-muted">
-          {stats.examsPassed} из {stats.examsTotal} экзаменов сдано · {stats.openMistakes} ошибок ждут повторения
-        </div>
-        {readinessOpen ? (
-          <div className="mt-3 space-y-2">
-            {topics.data?.map((t) => (
-              <div key={t.id}>
-                <div className="flex justify-between text-[13px] font-bold">
-                  <span>{t.title}</span>
-                  <span className="text-muted">
-                    {t.correct}/{t.total}
-                  </span>
+        </button>
+        {readyOpen ? (
+          <div id="readiness-body">
+            <ProgressBar value={stats.readiness / 100} className="mt-2" color="ok" />
+            <div className="mt-1.5 text-[12px] font-bold text-muted">
+              {stats.examsPassed} из {stats.examsTotal} экзаменов сдано · {stats.openMistakes} ошибок ждут повторения
+            </div>
+            <div className="mt-3 space-y-2">
+              {topics.data?.map((t) => (
+                <div key={t.id}>
+                  <div className="flex justify-between gap-2 text-[13px] font-bold">
+                    <span className="min-w-0 truncate">{t.title}</span>
+                    <span className="text-muted shrink-0">
+                      {t.correct}/{t.total}
+                    </span>
+                  </div>
+                  <ProgressBar value={t.total ? t.correct / t.total : 0} className="h-1.5 mt-1" />
                 </div>
-                <ProgressBar value={t.total ? t.correct / t.total : 0} className="h-1.5 mt-1" />
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         ) : null}
       </Card>

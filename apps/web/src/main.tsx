@@ -22,10 +22,14 @@ const queryClient = new QueryClient({
   },
 });
 
+// GitHub Pages отдаёт приложение из подпапки (например /zayush-pdd/).
+// basename берётся из Vite base, чтобы роутинг работал и там, и на корневом домене.
+const basename = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') || undefined;
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
+      <BrowserRouter basename={basename}>
         <App />
       </BrowserRouter>
     </QueryClientProvider>

@@ -9,6 +9,7 @@ import type { SettingsService } from './services/settings.js';
 import type { SubscriptionService } from './services/subscription.js';
 import type { LegalService } from './services/legal.js';
 import type { SmsSender } from './services/sms.js';
+import type { ActivityService } from './services/activity.js';
 import type { User } from './generated/prisma/client.js';
 
 export interface AppContext {
@@ -23,6 +24,7 @@ export interface AppContext {
   notifier: Notifier;
   legal: LegalService;
   sms: SmsSender;
+  activity: ActivityService;
 }
 
 declare module 'fastify' {

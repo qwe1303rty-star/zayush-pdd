@@ -1,12 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import { BOT_TEXTS, createBot, isHttpsUrl, openKeyboard } from './index.js';
+﻿import { describe, expect, it } from 'vitest';
+import { BOT_TEXTS, createBot, isHttpsUrl } from './index.js';
 
 describe('бот', () => {
-  it('кнопка открывает Mini App по web_app URL', () => {
-    const kb = openKeyboard('https://zayush.example');
-    const btn = kb.inline_keyboard[0][0] as { text: string; web_app?: { url: string } };
-    expect(btn.text).toBe(BOT_TEXTS.openButton);
-    expect(btn.web_app?.url).toBe('https://zayush.example');
+  it('Mini App / web_app кнопок больше нет', () => {
+    expect(JSON.stringify(BOT_TEXTS)).not.toMatch(/web_app/);
   });
 
   it('Mini App открывается только по HTTPS', () => {
@@ -16,7 +13,7 @@ describe('бот', () => {
   });
 
   it('создаётся без сетевых запросов', () => {
-    const bot = createBot({ token: '123:abc', webAppUrl: 'https://zayush.example' });
+    const bot = createBot({ token: '123:abc' });
     expect(bot).toBeTruthy();
   });
 

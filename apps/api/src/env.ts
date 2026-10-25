@@ -58,6 +58,16 @@ const schema = z.object({
   /** Через сколько дней без входа аккаунт и все данные удаляются автоматически (0 — не удалять) */
   RETENTION_INACTIVE_DAYS: z.coerce.number().int().min(0).default(1095),
 
+  // ── Аналитика посещаемости в админ-панели (ПДн: поведенческий профиль) ──
+  /** Записывать отметки присутствия пользователей для статистики онлайна и посещаемости */
+  ACTIVITY_TRACKING: z.string().default('false'),
+  /** Не чаще одной отметки присутствия в эти минуты на пользователя */
+  ACTIVITY_PING_MIN: z.coerce.number().int().min(1).max(60).default(5),
+  /** Пользователь считается «онлайн», если отметка была в эти минуты */
+  ACTIVITY_ONLINE_MIN: z.coerce.number().int().min(1).max(60).default(10),
+  /** Сколько дней хранить отметки присутствия (0 — не чистить) */
+  ACTIVITY_RETENTION_DAYS: z.coerce.number().int().min(0).default(180),
+
   // ── Подтверждение российского номера телефона (149-ФЗ, ч. 10 ст. 8; ответственность — ст. 13.55 КоАП с 07.07.2026) ──
   AUTH_RU_PHONE_REQUIRED: z.string().default('false'),
   /** console — код пишется в лог (только разработка); smsru — отправка через sms.ru */
@@ -96,6 +106,7 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     devAuthBypass,
     remindersEnabled: parseBool(e.REMINDERS_ENABLED),
     phoneRequired: parseBool(e.AUTH_RU_PHONE_REQUIRED),
+    activityTracking: parseBool(e.ACTIVITY_TRACKING),
     adminTelegramIds: new Set(
       e.ADMIN_TELEGRAM_IDS.split(',')
         .map((s) => s.trim())

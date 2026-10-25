@@ -56,23 +56,25 @@ model User {
   dailyProgress      DailyProgress[]
   subscriptionChecks SubscriptionCheck[]
   feedbackReports    FeedbackReport[]
-  sessions           UserSession[]
+  activity           ActivityPing[]
 
   @@index([lastSeenAt])
 }
 
-// ───────────────────────── Контент ─────────────────────────
+/// Отметка присутствия пользователя (аналитика посещаемости для админ-панели).
+/// Записывается не чаще одного раза в ACTIVITY_PING_MIN минут и только при ACTIVITY_TRACKING=true.
+/// Это ПДн (поведенческий профиль): отражено в политике, чистится по ACTIVITY_RETENTION_DAYS.
+model ActivityPing {
+  id     String   @id @default(cuid())
+  userId String
+  at     DateTime @default(now())
+  user   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-model UserSession {
-  id         String   @id @default(cuid())
-  userId     String
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  startedAt  DateTime @default(now())
-  lastSeenAt DateTime @default(now())
-
-  @@index([userId, startedAt])
-  @@index([startedAt])
+  @@index([at])
+  @@index([userId, at])
 }
+
+// ───────────────────────── Контент ─────────────────────────
 
 model Topic {
   id          String     @id @default(cuid())

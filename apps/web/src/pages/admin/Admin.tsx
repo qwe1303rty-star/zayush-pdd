@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, ChevronDown, Plus, Save, Trash2, Upload } from 'lucide-react';
+import { ArrowLeft, Plus, Save, Trash2, Upload } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 import { api, ApiError, getAdminToken, setAdminToken } from '../../lib/api';
-import { Button, Card, Chips, cx, Pill, ProgressBar, Toggle } from '../../components/ui';
+import { formatPoints } from '@zayush/shared';
+import { Button, Card, Chips, cx, Pill, Toggle } from '../../components/ui';
 
 /**
  * Минимальная админ-панель. Доступ проверяется на сервере:
@@ -12,21 +13,15 @@ import { Button, Card, Chips, cx, Pill, ProgressBar, Toggle } from '../../compon
  */
 const A = <T,>(path: string, init: Parameters<typeof api>[1] = {}) => api<T>(`/admin${path}`, { ...init, admin: true });
 
-type Tab = 'stats' | 'questions' | 'signs' | 'subs' | 'balance' | 'texts' | 'reports' | 'import';
+type Tab = 'stats' | 'users' | 'questions' | 'signs' | 'subs' | 'balance' | 'texts' | 'reports' | 'import';
 
 export default function Admin() {
   const navigate = useNavigate();
   const who = useQuery({ queryKey: ['admin-who'], queryFn: () => A<{ admin: boolean }>('/whoami'), retry: false });
   const [tab, setTab] = useState<Tab>('stats');
-  const [view, setView] = useState<'main' | 'activity'>('main');
-  const [detailMetric, setDetailMetric] = useState<string | null>(null);
 
   if (who.isPending) return <Shell>Проверяем доступ…</Shell>;
   if (who.isError) return <Login onDone={() => who.refetch()} error={(who.error as ApiError).status === 403 ? 'Нет доступа' : null} />;
-
-  if (view === 'activity' && detailMetric) {
-    return <ActivityDetail metric={detailMetric} onBack={() => { setView('main'); setDetailMetric(null); }} />;
-  }
 
   return (
     <Shell>
@@ -47,6 +42,7 @@ export default function Admin() {
         onChange={setTab}
         items={[
           { value: 'stats', label: 'Обзор' },
+          { value: 'users', label: 'Пользователи' },
           { value: 'questions', label: 'Вопросы' },
           { value: 'signs', label: 'Знаки' },
           { value: 'subs', label: 'Подписка' },
@@ -57,7 +53,8 @@ export default function Admin() {
         ]}
       />
       <div className="mt-4">
-        {tab === 'stats' && <Stats onOpenDetail={(m) => { setDetailMetric(m); setView('activity'); }} />}
+        {tab === 'stats' && <Stats />}
+        {tab === 'users' && <Users />}
         {tab === 'questions' && <Questions />}
         {tab === 'signs' && <SignsAdmin />}
         {tab === 'subs' && <Subscriptions />}
@@ -109,127 +106,77 @@ function ErrorLine({ e }: { e: unknown }) {
   return e ? <p className="mt-2 text-bad font-bold text-[13px]">{(e as ApiError).message}</p> : null;
 }
 
-// ───────── Обзор ─────────
-interface ActivityRow {
-  id: string;
-  userId: string;
-  firstName: string;
-  telegramId: string;
-  isNew: boolean;
-  isActiveNow: boolean;
-  startedAt: string;
-  lastSeenAt: string;
-  durationMin: number;
+interface StatsDTO {
+  users: number;
+  active7: number;
+  newToday: number;
+  new7: number;
+  answers: number;
+  answers7: number;
+  questions: number;
+  demoQuestions: number;
+  exams: number;
+  examsPassed: number;
+  openReports: number;
+  activityTracking: boolean;
+  onlineNow: number | null;
+  peakDay: { users: number; at: string } | null;
+  peakWeek: { users: number; at: string } | null;
+  onlineWindowMin: number;
+  hardest: { externalId: string; text: string; mistakes: number }[];
 }
 
-function Stats({ onOpenDetail }: { onOpenDetail: (metric: string) => void }) {
-  const q = useQuery({ queryKey: ['admin-stats'], queryFn: () => A<Record<string, number | unknown>>('/stats') });
-  const [onlineOpen, setOnlineOpen] = useState(false);
-  const online = useQuery({ queryKey: ['admin-online'], queryFn: () => A<ActivityRow[]>('/activity?limit=100&hours=1&activeNow=true'), enabled: onlineOpen, refetchInterval: onlineOpen ? 30000 : false });
+// ───────── Обзор ─────────
+function Stats() {
+  const q = useQuery({ queryKey: ['admin-stats'], queryFn: () => A<StatsDTO>('/stats'), refetchInterval: 30_000 });
   if (!q.data) return <p>Загрузка…</p>;
-  const d = q.data as Record<string, number> & {
-    hardest: { externalId: string; text: string; mistakes: number }[];
-    dailyActivity: { day: string; users: number; answers: number }[];
-    topTopics: { title: string; questions: number; answers: number; correct: number; accuracy: number }[];
-  };
-  const cells: { k: string; v: number; metric?: string }[] = [
-    { k: 'Пользователи', v: d.users, metric: 'users' },
-    { k: 'Новых за 7 дн.', v: d.newUsers7, metric: 'newUsers7' },
-    { k: 'Новых сегодня', v: d.newToday, metric: 'newToday' },
-    { k: 'Сейчас активны', v: d.activeNow, metric: 'activeNow' },
-    { k: 'Активны сегодня', v: d.activeToday, metric: 'activeToday' },
-    { k: 'Активны за 7 дн.', v: d.active7, metric: 'active7' },
-    { k: 'Активны за 30 дн.', v: d.active30, metric: 'active30' },
-    { k: 'Ответов всего', v: d.answers },
-    { k: 'Ответов за 7 дн.', v: d.answers7 },
-    { k: 'Вопросов опубликовано', v: d.questions },
-    { k: 'Из них демо', v: d.demoQuestions },
-    { k: 'Экзаменов', v: d.exams },
-    { k: 'Сдано', v: d.examsPassed },
-    { k: 'Ошибок открыто', v: d.mistakesOpen },
-    { k: 'Ошибок всего', v: d.mistakesTotal },
-    { k: 'Избранного', v: d.favorites },
-    { k: 'Сессий за 7 дн.', v: d.sessions7, metric: 'sessions7' },
-    { k: 'Ср. время сессии, мин', v: d.avgSessionMinutes7 },
-    { k: 'Открытых жалоб', v: d.openReports },
+  const d = q.data;
+  const cells: [string, number | string][] = [
+    ['Пользователей всего', d.users],
+    ['Новых сегодня', d.newToday],
+    ['Новых за 7 дней', d.new7],
+    ['Активны за 7 дней', d.active7],
+    ['Ответов всего', d.answers],
+    ['Ответов за 7 дней', d.answers7],
+    ['Вопросов опубликовано', d.questions],
+    ['Экзаменов', d.exams],
+    ['Открытых жалоб', d.openReports],
   ];
-  const maxAnswers = Math.max(1, ...d.dailyActivity.map((x) => x.answers));
   return (
     <>
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5">
-        {cells.map(({ k, v, metric }) => (
-          <Card
-            key={k}
-            className={`p-3 ${metric ? 'cursor-pointer hover:ring-2 hover:ring-pink/40' : ''}`}
-            onClick={metric ? () => onOpenDetail(metric) : undefined}
-          >
-            <div className="text-[22px] font-black text-pink">{v}</div>
-            <div className="text-[11.5px] font-bold text-muted">{k}{metric ? ' ↗' : ''}</div>
-          </Card>
-        ))}
-      </div>
-
-      <div className="mt-5 flex items-center gap-2 cursor-pointer select-none" onClick={() => setOnlineOpen((v) => !v)}>
-        <h3 className="font-black">Онлайн сейчас</h3>
-        <span className="text-[12px] font-bold text-muted">({d.activeNow})</span>
-        <ChevronDown className={`size-4 text-muted transition-transform ${onlineOpen ? 'rotate-180' : ''}`} />
-      </div>
-      {onlineOpen ? (
-        <Card className="mt-2 p-3">
-          {online.isPending ? <p className="text-[12px] text-muted">Загрузка…</p> : null}
-          {online.isError ? <p className="text-[12px] text-bad">Ошибка загрузки</p> : null}
-          <div className="space-y-1.5 max-h-60 overflow-auto">
-            {online.data?.map((a) => {
-              const t = new Date(a.lastSeenAt);
-              const time = t.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow' });
-              return (
-                <div key={a.id} className="flex items-center justify-between gap-2 text-[12.5px] font-semibold">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="inline-block size-2 rounded-full bg-green-500" />
-                    <span className="truncate">{a.firstName}</span>
-                    <span className="text-muted tabular-nums text-[11px]">({a.telegramId})</span>
-                    {a.isNew ? <Pill tone="gold">новый</Pill> : null}
-                  </div>
-                  <span className="text-muted tabular-nums shrink-0">{time} · {a.durationMin} мин</span>
-                </div>
-              );
-            })}
-            {!online.isPending && !online.data?.length ? <p className="text-[12px] text-muted">Никого нет онлайн</p> : null}
-          </div>
-        </Card>
-      ) : null}
-
-      <h3 className="mt-5 font-black">Активность за 14 дней</h3>
-      <Card className="mt-2 p-3">
-        <div className="flex items-end gap-1 h-32">
-          {d.dailyActivity.map((x) => (
-            <div key={x.day} className="flex-1 flex flex-col items-center gap-1">
-              <div className="w-full flex flex-col justify-end" style={{ height: '100%' }}>
-                <div className="w-full bg-pink/80 rounded-t" style={{ height: `${(x.answers / maxAnswers) * 100}%`, minHeight: x.answers ? 2 : 0 }} title={`${x.answers} ответов`} />
-              </div>
-              <div className="text-[9px] font-bold text-muted rotate-[-45deg] origin-top-left whitespace-nowrap">{x.day.slice(5)}</div>
+      {d.activityTracking ? (
+        <div className="grid grid-cols-3 gap-2.5">
+          <Card className="p-3">
+            <div className="text-[24px] font-black text-ok flex items-center gap-1.5">
+              <span className="inline-block size-2.5 rounded-full bg-ok animate-pulse" />
+              {d.onlineNow ?? 0}
             </div>
-          ))}
+            <div className="text-[12px] font-bold text-muted">Онлайн сейчас</div>
+            <div className="text-[10px] font-bold text-muted mt-0.5">за {d.onlineWindowMin} мин</div>
+          </Card>
+          <Card className="p-3">
+            <div className="text-[24px] font-black text-pink">{d.peakDay?.users ?? 0}</div>
+            <div className="text-[12px] font-bold text-muted">Пик за день</div>
+          </Card>
+          <Card className="p-3">
+            <div className="text-[24px] font-black text-pink">{d.peakWeek?.users ?? 0}</div>
+            <div className="text-[12px] font-bold text-muted">Пик за неделю</div>
+          </Card>
         </div>
-        <div className="mt-6 text-[11.5px] font-semibold text-muted">Столбцы — ответы. Активные пользователи по дням: {d.dailyActivity.map((x) => x.users).join(', ')}</div>
-      </Card>
-
-      <h3 className="mt-5 font-black">Топ тем по ответам</h3>
-      <div className="mt-2 space-y-2">
-        {d.topTopics.map((t) => (
-          <Card key={t.title} className="p-3">
-            <div className="flex items-center justify-between gap-2">
-              <div className="font-extrabold text-[13px] truncate">{t.title}</div>
-              <Pill tone={t.accuracy >= 80 ? 'ok' : 'pink'}>{t.accuracy}%</Pill>
-            </div>
-            <div className="mt-1 text-[12px] font-bold text-muted">
-              вопросов: {t.questions} · ответов: {t.answers} · верно: {t.correct}
-            </div>
-            <ProgressBar value={t.answers ? t.correct / t.answers : 0} className="h-1.5 mt-1.5" color="ok" />
+      ) : (
+        <Card className="p-3 text-[12.5px] font-semibold text-muted">
+          Статистика онлайна и посещаемости выключена. Включите <code>ACTIVITY_TRACKING=true</code> — это учёт времени входов (ПДн, отражён в политике).
+        </Card>
+      )}
+      {d.activityTracking ? <ActivityChart /> : null}
+      <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+        {cells.map(([k, v]) => (
+          <Card key={k} className="p-3">
+            <div className="text-[24px] font-black text-pink">{v}</div>
+            <div className="text-[12px] font-bold text-muted">{k}</div>
           </Card>
         ))}
       </div>
-
       <h3 className="mt-5 font-black">Самые сложные вопросы</h3>
       <div className="mt-2 space-y-2">
         {d.hardest.map((h) => (
@@ -239,6 +186,215 @@ function Stats({ onOpenDetail }: { onOpenDetail: (metric: string) => void }) {
         ))}
       </div>
     </>
+  );
+}
+
+// ───────── Диаграмма (SVG, без зависимостей) ─────────
+const MSK = (iso: string) => new Date(iso);
+function fmt(iso: string, unit: 'minute' | 'hour' | 'day') {
+  const o: Intl.DateTimeFormatOptions =
+    unit === 'day' ? { day: '2-digit', month: '2-digit' } : unit === 'hour' ? { hour: '2-digit', minute: '2-digit' } : { hour: '2-digit', minute: '2-digit' };
+  return new Intl.DateTimeFormat('ru-RU', { ...o, timeZone: 'Europe/Moscow' }).format(MSK(iso));
+}
+
+function BarChart({ points, unit, valueKey = 'users', height = 120 }: { points: { t: string; users?: number; pings?: number }[]; unit: 'minute' | 'hour' | 'day'; valueKey?: 'users' | 'pings'; height?: number }) {
+  if (!points.length) return <p className="text-[13px] font-semibold text-muted py-6 text-center">Пока нет данных за период.</p>;
+  const vals = points.map((p) => p[valueKey] ?? 0);
+  const max = Math.max(1, ...vals);
+  const step = Math.ceil(points.length / 8);
+  return (
+    <div className="overflow-x-auto">
+      <div className="flex items-end gap-[3px]" style={{ height, minWidth: points.length * 10 }}>
+        {points.map((p, i) => {
+          const v = p[valueKey] ?? 0;
+          return (
+            <div key={p.t} className="flex-1 min-w-[6px] flex flex-col items-center justify-end group relative">
+              <div className="w-full rounded-t bg-gradient-to-t from-pink to-[#ff7ab8]" style={{ height: `${(v / max) * (height - 18)}px` }} title={`${fmt(p.t, unit)}: ${v}`} />
+              <div className="text-[8px] font-bold text-muted mt-1 h-3 overflow-hidden whitespace-nowrap">{i % step === 0 ? fmt(p.t, unit) : ''}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ActivityChart() {
+  const [range, setRange] = useState<'day' | 'week'>('day');
+  const q = useQuery({ queryKey: ['admin-activity', range], queryFn: () => A<{ unit: 'hour' | 'day'; points: { t: string; users: number; pings: number }[] }>(`/activity?range=${range}`) });
+  return (
+    <Card className="mt-3 p-3.5">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="font-black text-[15px]">Посещаемость</h3>
+        <Chips value={range} onChange={setRange} items={[{ value: 'day', label: 'День' }, { value: 'week', label: 'Неделя' }]} />
+      </div>
+      <p className="text-[11px] font-bold text-muted mt-1">Уникальные пользователи по {range === 'day' ? 'часам' : 'дням'} (МСК)</p>
+      <div className="mt-2">{q.data ? <BarChart points={q.data.points} unit={q.data.unit} /> : <p className="text-[13px] text-muted py-6">Загрузка…</p>}</div>
+    </Card>
+  );
+}
+
+// ───────── Пользователи ─────────
+interface UserRow {
+  id: string;
+  firstName: string;
+  telegramId: string;
+  xp: number;
+  streakDays: number;
+  answers: number;
+  exams: number;
+  createdAt: string;
+  lastSeenAt: string;
+  online: boolean;
+}
+type Sort = 'recent' | 'new' | 'xp' | 'answers';
+const dt = (iso: string) => new Intl.DateTimeFormat('ru-RU', { dateStyle: 'short', timeStyle: 'short', timeZone: 'Europe/Moscow' }).format(new Date(iso));
+
+function Users() {
+  const [search, setSearch] = useState('');
+  const [sort, setSort] = useState<Sort>('recent');
+  const [page, setPage] = useState(0);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const q = useQuery({
+    queryKey: ['admin-users', search, sort, page],
+    queryFn: () => A<{ total: number; page: number; pageSize: number; activityTracking: boolean; users: UserRow[] }>(`/users?search=${encodeURIComponent(search)}&sort=${sort}&page=${page}`),
+  });
+  const d = q.data;
+  const pages = d ? Math.ceil(d.total / d.pageSize) : 0;
+  return (
+    <div>
+      <div className="flex gap-2">
+        <input className={inputCls} placeholder="Имя или Telegram ID" value={search} onChange={(e) => { setSearch(e.target.value); setPage(0); }} />
+      </div>
+      <Chips className="mt-2" value={sort} onChange={(v) => { setSort(v); setPage(0); }} items={[
+        { value: 'recent', label: 'Недавние' },
+        { value: 'new', label: 'Новые' },
+        { value: 'xp', label: 'По баллам' },
+      ]} />
+      {d ? <p className="mt-2 text-[12px] font-bold text-muted">Всего: {d.total}{d.activityTracking ? '' : ' · онлайн-статус выключен (ACTIVITY_TRACKING)'}</p> : null}
+      <div className="mt-2 space-y-2">
+        {d?.users.map((u) => (
+          <Card key={u.id} className="p-3 flex items-center gap-3" onClick={() => setOpenId(u.id)}>
+            <div className="relative shrink-0">
+              <div className="size-10 rounded-full bg-pink-100 text-pink grid place-items-center font-black">{u.firstName.slice(0, 1).toUpperCase()}</div>
+              {d.activityTracking && u.online ? <span className="absolute -right-0.5 -bottom-0.5 size-3 rounded-full bg-ok border-2 border-white" /> : null}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="font-extrabold truncate">{u.firstName} <span className="text-muted font-bold text-[12px]">#{u.telegramId}</span></div>
+              <div className="text-[11.5px] font-bold text-muted truncate">{formatPoints(u.xp)} · ответов {u.answers} · был {dt(u.lastSeenAt)}</div>
+            </div>
+          </Card>
+        ))}
+      </div>
+      {pages > 1 ? (
+        <div className="mt-3 flex items-center justify-center gap-3">
+          <Button size="sm" variant="ghost" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>Назад</Button>
+          <span className="text-[13px] font-bold">{page + 1} / {pages}</span>
+          <Button size="sm" variant="ghost" disabled={page + 1 >= pages} onClick={() => setPage((p) => p + 1)}>Вперёд</Button>
+        </div>
+      ) : null}
+      {openId ? <UserModal id={openId} onClose={() => setOpenId(null)} /> : null}
+    </div>
+  );
+}
+
+interface UserDetail {
+  user: { id: string; firstName: string; telegramId: string; xp: number; streakDays: number; bestStreak: number; answers: number; exams: number; mistakes: number; createdAt: string; lastSeenAt: string; consentAt: string | null; botCanWrite: boolean; notificationsEnabled: boolean };
+  activityTracking: boolean;
+  bucket: 'minute' | 'hour' | 'day';
+  series: { t: string; pings: number }[];
+  sessions: { start: string; end: string; minutes: number; pings: number }[];
+  sessionsTotal: number;
+  totalMinutes: number;
+}
+
+function UserModal({ id, onClose }: { id: string; onClose: () => void }) {
+  const [bucket, setBucket] = useState<'minute' | 'hour' | 'day'>('day');
+  const q = useQuery({ queryKey: ['admin-user', id, bucket], queryFn: () => A<UserDetail>(`/users/${id}?bucket=${bucket}`) });
+  const u = q.data?.user;
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" role="dialog" aria-modal="true">
+      <div className="absolute inset-0 bg-ink/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="relative w-full max-w-[560px] bg-white rounded-t-[24px] sm:rounded-[24px] p-4 pb-[calc(16px+var(--safe-bottom))] max-h-[90dvh] overflow-y-auto">
+        {!u ? (
+          <p className="py-8 text-center text-muted font-bold">Загрузка…</p>
+        ) : (
+          <>
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <div className="text-[19px] font-black">{u.firstName}</div>
+                <div className="text-[12px] font-bold text-muted">Telegram ID {u.telegramId}</div>
+              </div>
+              <button onClick={onClose} className="size-8 grid place-items-center rounded-full bg-pink-100 text-pink font-black">✕</button>
+            </div>
+            <div className="mt-3 grid grid-cols-3 gap-2">
+              <Mini2 v={formatPoints(u.xp)} k="баллы" />
+              <Mini2 v={u.answers} k="ответов" />
+              <Mini2 v={u.exams} k="экзаменов" />
+              <Mini2 v={u.streakDays} k="серия" />
+              <Mini2 v={u.bestStreak} k="лучшая серия" />
+              <Mini2 v={u.mistakes} k="ошибок" />
+            </div>
+            <div className="mt-3 text-[12.5px] font-semibold space-y-1">
+              <Row k="Регистрация" v={dt(u.createdAt)} />
+              <Row k="Последний вход" v={dt(u.lastSeenAt)} />
+              <Row k="Согласие" v={u.consentAt ? dt(u.consentAt) : '—'} />
+              <Row k="Бот может писать" v={u.botCanWrite ? 'да' : 'нет'} />
+            </div>
+
+            {q.data?.activityTracking ? (
+              <>
+                <div className="mt-4 flex items-center justify-between gap-2">
+                  <h3 className="font-black">Активность</h3>
+                  <Chips value={bucket} onChange={setBucket} items={[
+                    { value: 'minute', label: 'Минуты' },
+                    { value: 'hour', label: 'Часы' },
+                    { value: 'day', label: 'Дни' },
+                  ]} />
+                </div>
+                <p className="text-[11px] font-bold text-muted mt-1">
+                  {bucket === 'minute' ? 'Отметки входов за сегодня (по минутам)' : bucket === 'hour' ? 'За 2 дня (по часам)' : 'За 30 дней (по дням)'}
+                </p>
+                <div className="mt-2"><BarChart points={q.data.series} unit={bucket} valueKey="pings" height={100} /></div>
+
+                <div className="mt-4 flex items-center justify-between">
+                  <h3 className="font-black">Сессии</h3>
+                  <span className="text-[12px] font-bold text-muted">{q.data.sessionsTotal} · всего ~{q.data.totalMinutes} мин</span>
+                </div>
+                <div className="mt-2 space-y-1.5 max-h-[220px] overflow-y-auto">
+                  {q.data.sessions.length === 0 ? <p className="text-[13px] text-muted font-semibold">Нет отметок.</p> : null}
+                  {q.data.sessions.map((s, i) => (
+                    <div key={i} className="flex items-center justify-between gap-2 rounded-xl bg-pink-50 border border-pink-100 px-3 py-1.5 text-[12.5px] font-bold">
+                      <span>{dt(s.start)}</span>
+                      <span className="text-muted">{s.minutes} мин · {s.pings} отм.</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="mt-4 text-[12.5px] font-semibold text-muted">Трекинг посещаемости выключен (ACTIVITY_TRACKING). Доступны профиль и даты входа.</p>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Mini2({ v, k }: { v: ReactNode; k: string }) {
+  return (
+    <div className="rounded-xl bg-pink-50 border border-pink-100 py-2 text-center">
+      <div className="text-[16px] font-black text-pink leading-none">{v}</div>
+      <div className="text-[10.5px] font-bold text-muted mt-1">{k}</div>
+    </div>
+  );
+}
+function Row({ k, v }: { k: string; v: ReactNode }) {
+  return (
+    <div className="flex justify-between gap-2">
+      <span className="text-muted">{k}</span>
+      <span className="font-bold text-right">{v}</span>
+    </div>
   );
 }
 
@@ -834,107 +990,5 @@ function ImportTab() {
         Импортировать
       </Button>
     </Card>
-  );
-}
-function metricParams(metric: string): string {
-  switch (metric) {
-    case 'newToday': return 'limit=500&hours=24&newOnly=true';
-    case 'newUsers7': return 'limit=500&hours=168&newOnly=true';
-    case 'activeNow': return 'limit=500&hours=1&activeNow=true';
-    case 'activeToday': return 'limit=500&hours=24';
-    case 'active7': return 'limit=500&hours=168';
-    case 'active30': return 'limit=500&hours=168';
-    case 'sessions7': return 'limit=500&hours=168';
-    case 'users': return 'limit=500&hours=168';
-    default: return 'limit=500&hours=24';
-  }
-}
-
-function metricTitle(metric: string): string {
-  const map: Record<string, string> = {
-    users: 'Все пользователи',
-    newUsers7: 'Новые за 7 дней',
-    newToday: 'Новые сегодня',
-    activeNow: 'Сейчас активны',
-    activeToday: 'Активны сегодня',
-    active7: 'Активны за 7 дней',
-    active30: 'Активны за 30 дней',
-    sessions7: 'Сессии за 7 дней',
-  };
-  return map[metric] ?? 'Детали';
-}
-
-function ActivityDetail({ metric, onBack }: { metric: string; onBack: () => void }) {
-  const [period, setPeriod] = useState<'today' | '7d' | '30d'>('today');
-  const [groupBy, setGroupBy] = useState<'day' | 'hour' | 'minute'>('hour');
-  const hours = period === 'today' ? 24 : period === '7d' ? 168 : 720;
-  const params = `${metricParams(metric).replace(/hours=\d+/, `hours=${hours}`)}&groupBy=${groupBy}`;
-  const q = useQuery({ queryKey: ['admin-activity-detail', params], queryFn: () => A<{ timeline: { period: string; count: number; users: number }[]; sessions: ActivityRow[] }>(`/activity?${params}`), refetchInterval: 30000 });
-  const timeline = q.data?.timeline ?? [];
-  const sessions = q.data?.sessions ?? [];
-  const maxCount = Math.max(1, ...timeline.map((t) => t.count));
-  return (
-    <Shell>
-      <div className="flex items-center gap-2">
-        <button onClick={onBack} className="size-10 grid place-items-center rounded-full bg-white border border-pink-200">
-          <ArrowLeft className="size-5" />
-        </button>
-        <h1 className="text-[22px] font-black flex-1">{metricTitle(metric)}</h1>
-      </div>
-
-      <div className="mt-3 flex flex-wrap gap-2">
-        <Chips value={period} onChange={(v) => setPeriod(v as 'today' | '7d' | '30d')} items={[
-          { value: 'today', label: 'Сегодня' },
-          { value: '7d', label: '7 дней' },
-          { value: '30d', label: '30 дней' },
-        ]} />
-        <Chips value={groupBy} onChange={(v) => setGroupBy(v as 'day' | 'hour' | 'minute')} items={[
-          { value: 'day', label: 'По дням' },
-          { value: 'hour', label: 'По часам' },
-          { value: 'minute', label: 'По минутам' },
-        ]} />
-      </div>
-
-      <Card className="mt-4 p-3">
-        <div className="text-[13px] font-black mb-2">Диаграмма активности</div>
-        {q.isPending ? <p className="text-[12px] text-muted">Загрузка…</p> : null}
-        {q.isError ? <p className="text-[12px] text-bad">Ошибка загрузки</p> : null}
-        <div className="flex items-end gap-1 h-32">
-          {timeline.map((t) => (
-            <div key={t.period} className="flex-1 flex flex-col items-center gap-1" title={`${t.period}: ${t.count} входов, ${t.users} польз.`}>
-              <div className="w-full flex flex-col justify-end" style={{ height: '100%' }}>
-                <div className="w-full bg-pink/80 rounded-t" style={{ height: `${(t.count / maxCount) * 100}%`, minHeight: t.count ? 2 : 0 }} />
-              </div>
-              <div className="text-[8px] font-bold text-muted rotate-[-45deg] origin-top-left whitespace-nowrap">{t.period.slice(-5)}</div>
-            </div>
-          ))}
-        </div>
-        <div className="mt-6 text-[11.5px] font-semibold text-muted">Всего входов: {sessions.length}</div>
-      </Card>
-
-      <Card className="mt-3 p-3">
-        <div className="text-[13px] font-black mb-2">Список по минутам</div>
-        <div className="space-y-1.5 max-h-[50vh] overflow-auto">
-          {sessions.map((a) => {
-            const t = new Date(a.startedAt);
-            const time = t.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow' });
-            const date = t.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', timeZone: 'Europe/Moscow' });
-            return (
-              <div key={a.id} className="flex items-center justify-between gap-2 text-[12.5px] font-semibold border-b border-pink-50 pb-1.5">
-                <div className="flex items-center gap-2 min-w-0 flex-wrap">
-                  <span className="text-muted tabular-nums">{date} {time}</span>
-                  <span className="truncate">{a.firstName}</span>
-                  <span className="text-muted tabular-nums text-[11px]">({a.telegramId})</span>
-                  {a.isNew ? <Pill tone="gold">новый</Pill> : null}
-                  {a.isActiveNow ? <span className="inline-block size-2 rounded-full bg-green-500" title="Сейчас активен" /> : null}
-                </div>
-                <span className="text-muted tabular-nums shrink-0">{a.durationMin} мин</span>
-              </div>
-            );
-          })}
-          {!q.isPending && !sessions.length ? <p className="text-[12px] text-muted">Нет данных</p> : null}
-        </div>
-      </Card>
-    </Shell>
   );
 }

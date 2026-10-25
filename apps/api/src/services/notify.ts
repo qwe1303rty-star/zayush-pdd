@@ -12,7 +12,7 @@ export class Notifier {
   constructor(
     private db: Db,
     private api: Api | null,
-    private webAppUrl: string,
+    private webAppUrl: string = '',
     private log?: FastifyBaseLogger,
   ) {}
 
@@ -25,12 +25,7 @@ export class Notifier {
     const u = await this.db.user.findUnique({ where: { id: userId } });
     if (!u || !u.botCanWrite || !u.notificationsEnabled || u.isBlocked) return false;
     try {
-      const isHttps = this.webAppUrl.startsWith('https://');
-      await this.api.sendMessage(
-        Number(u.telegramId),
-        text,
-        isHttps ? { reply_markup: { inline_keyboard: [[{ text: 'Открыть Заюш ПДД', web_app: { url: this.webAppUrl } }]] } } : {},
-      );
+      await this.api.sendMessage(Number(u.telegramId), text);
       return true;
     } catch (e) {
       const code = (e as { error_code?: number }).error_code;

@@ -15,6 +15,7 @@ import { adminRoutes } from './routes/admin.js';
 import { legalApiRoutes, legalPublicRoutes } from './routes/legal.js';
 import { userRoutes } from './routes/user.js';
 import { LegalService } from './services/legal.js';
+import { ActivityService } from './services/activity.js';
 import { ConsoleSms, type SmsSender, SmsRu } from './services/sms.js';
 import { AnthropicProvider, AssistantService } from './services/assistant.js';
 import { ExamService } from './services/exam.js';
@@ -75,7 +76,8 @@ export async function buildApp(opts: BuildOptions): Promise<{ app: FastifyInstan
   const notifier = new Notifier(db, opts.bot?.api ?? null, env.WEBAPP_URL, app.log);
   const legal = new LegalService(env);
   const sms = opts.sms ?? (env.SMS_PROVIDER === 'smsru' && env.SMSRU_API_ID ? new SmsRu(env.SMSRU_API_ID) : new ConsoleSms(app.log));
-  const ctx: AppContext = { env, db, settings, learning, exam, subscription, profile, assistant, notifier, legal, sms };
+  const activity = new ActivityService(db, env);
+  const ctx: AppContext = { env, db, settings, learning, exam, subscription, profile, assistant, notifier, legal, sms, activity };
   if (env.isProd && !env.phoneRequired)
     app.log.warn(
       'AUTH_RU_PHONE_REQUIRED выключен: вход только через Telegram. С 07.07.2026 действует ст. 13.55 КоАП (ч. 10 ст. 8 149-ФЗ) — см. docs/legal.md',

@@ -65,30 +65,21 @@ export function makeAuthenticate(ctx: AppContext) {
     if (user.isBlocked) throw errors.forbidden();
 
     const name = tgUser.first_name.slice(0, 64);
-    const now = new Date();
-    const stale = now.getTime() - user.lastSeenAt.getTime() > SEEN_UPDATE_MS;
+    const stale = Date.now() - user.lastSeenAt.getTime() > SEEN_UPDATE_MS;
     if (stale || user.firstName !== name || (tgUser.allows_write_to_pm === true && !user.botCanWrite)) {
       user = await ctx.db.user.update({
         where: { id: user.id },
         data: {
           firstName: name,
-          lastSeenAt: now,
+          lastSeenAt: new Date(),
           ...(tgUser.allows_write_to_pm === true ? { botCanWrite: true } : {}),
         },
       });
     }
 
-    // Трекинг сессий для статистики времени в приложении
-    const SESSION_GAP_MS = 30 * 60 * 1000;
-    const lastSession = await ctx.db.userSession.findFirst({ where: { userId: user.id }, orderBy: { lastSeenAt: 'desc' } });
-    if (!lastSession || now.getTime() - lastSession.lastSeenAt.getTime() > SESSION_GAP_MS) {
-      await ctx.db.userSession.create({ data: { userId: user.id } });
-    } else {
-      await ctx.db.userSession.update({ where: { id: lastSession.id }, data: { lastSeenAt: now } });
-    }
-
     req.user = user;
     req.isAdmin = ctx.env.adminTelegramIds.has(String(user.telegramId));
+    ctx.activity.ping(user.id);
 
     if (ctx.env.phoneRequired && !user.phoneVerifiedAt && !req.routeOptions.config?.skipPhone) throw errors.phoneRequired();
   };

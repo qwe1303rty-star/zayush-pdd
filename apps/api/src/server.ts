@@ -15,7 +15,6 @@ const bot =
   env.BOT_TOKEN && env.BOT_MODE !== 'off'
     ? createBot({
         token: env.BOT_TOKEN,
-        webAppUrl: env.WEBAPP_URL,
         policyUrl: `${(env.PUBLIC_API_URL || env.WEBAPP_URL).replace(/\/$/, '')}/legal/privacy`,
         onStart: (from) => onStart?.(from) ?? Promise.resolve(),
         onStop: (id) => onStop?.(id) ?? Promise.resolve(),
@@ -41,7 +40,7 @@ await app.listen({ port: env.PORT, host: env.HOST });
 if (bot) {
   try {
     await bot.init();
-    await configureBot(bot, env.WEBAPP_URL);
+    await configureBot(bot);
     if (env.BOT_MODE === 'webhook') {
       const base = (env.PUBLIC_API_URL || env.WEBAPP_URL).replace(/\/$/, '');
       await bot.api.setWebhook(`${base}/telegram/webhook`, {
@@ -59,7 +58,7 @@ if (bot) {
 }
 
 if (env.remindersEnabled && bot) startReminderJob(ctx.notifier, env.REMINDER_HOUR_MSK, app.log);
-startRetentionJob(ctx.db, env.RETENTION_INACTIVE_DAYS, app.log);
+startRetentionJob(ctx.db, env.RETENTION_INACTIVE_DAYS, env.ACTIVITY_RETENTION_DAYS, app.log);
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, async () => {
