@@ -23,6 +23,9 @@ jobs:
       - name: Generate Prisma client
         run: npx prisma generate
 
+      - name: Build shared package
+        run: npm run build -w @zayush/shared
+
       - name: Typecheck
         run: npm run typecheck
 
