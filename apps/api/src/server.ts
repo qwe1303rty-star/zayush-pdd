@@ -1,4 +1,4 @@
-import { configureBot, createBot } from '@zayush/bot';
+import { configureBot, createBot, isHttpsUrl } from '@zayush/bot';
 import { buildApp } from './app.js';
 import { loadEnv } from './env.js';
 import { seedDefaults } from './services/content-import.js';
@@ -40,7 +40,21 @@ await app.listen({ port: env.PORT, host: env.HOST });
 if (bot) {
   try {
     await bot.init();
-    await configureBot(bot);
+    if (isHttpsUrl(env.WEBAPP_URL)) {
+      await bot.api.setChatMenuButton({
+        menu_button: { type: 'web_app', text: 'Открыть Заюш ПДД', web_app: { url: env.WEBAPP_URL } },
+      });
+      await bot.api.setMyCommands([
+        { command: 'start', description: 'Приветствие' },
+        { command: 'help', description: 'Что умеет бот' },
+        { command: 'stop', description: 'Выключить напоминания' },
+        { command: 'privacy', description: 'Персональные данные' },
+      ]);
+      app.log.info(`Меню-кнопка Mini App установлена: ${env.WEBAPP_URL}`);
+    } else {
+      await configureBot(bot);
+      app.log.warn('WEBAPP_URL не HTTPS — меню-кнопка Mini App не установлена');
+    }
     if (env.BOT_MODE === 'webhook') {
       const base = (env.PUBLIC_API_URL || env.WEBAPP_URL).replace(/\/$/, '');
       await bot.api.setWebhook(`${base}/telegram/webhook`, {
